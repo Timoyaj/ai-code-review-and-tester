@@ -15,6 +15,7 @@ const App: React.FC = () => {
   const [files, setFiles] = useState<Record<string, string>>({});
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>('Text');
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
   const [agentIsThinking, setAgentIsThinking] = useState<boolean>(false);
@@ -41,10 +42,18 @@ const App: React.FC = () => {
             setOpenFiles(prev => [...prev, path]);
         }
         setCurrentFile(path);
+        setSelectedNode(path); // Sync selection
         const detectedLanguage = getLanguageFromExtension(path);
         setLanguage(detectedLanguage);
+    } else if (path === null) {
+        setCurrentFile(null);
+        setSelectedNode(null);
     }
   }, [files, openFiles]);
+
+  const handleNodeSelect = useCallback((path: string) => {
+    setSelectedNode(path);
+  }, []);
 
   useEffect(() => {
     try {
@@ -144,6 +153,7 @@ const App: React.FC = () => {
       if (newOpenFiles.length === 0) {
           setCurrentFile(null);
           setLanguage('Text');
+          setSelectedNode(null); // Also clear selection
       } else {
           const newIndex = Math.max(0, fileIndex - 1);
           const newFileToOpen = newOpenFiles[newIndex];
@@ -285,6 +295,7 @@ const App: React.FC = () => {
       setFiles({});
       setOpenFiles([]);
       setCurrentFile(null);
+      setSelectedNode(null);
       setChatHistory([{
             role: 'agent',
             type: 'text',
@@ -298,18 +309,48 @@ const App: React.FC = () => {
 
   // --- File Operations ---
 
-    const handleCreateNode = (path: string, type: 'file' | 'folder') => {
-        const newPath = prompt(`Enter name for new ${type}:`, path);
-        if (!newPath || !newPath.trim()) return;
-        if (Object.keys(files).some(p => p.startsWith(newPath))) {
-            alert('A file or folder with this name already exists.');
+    const handleCreateNode = (type: 'file' | 'folder') => {
+        let parentDir = '';
+        
+        if (selectedNode) {
+            // If the selected node path exists as a file, its parent is the directory.
+            // If it doesn't, it must be a folder path, so it IS the directory.
+            if (files[selectedNode] !== undefined) { // It's a file
+                const parts = selectedNode.split('/');
+                if (parts.length > 1) {
+                    parentDir = parts.slice(0, -1).join('/');
+                }
+            } else { // It's a folder
+                parentDir = selectedNode;
+            }
+        }
+
+        const name = prompt(`Enter name for new ${type}:`);
+        if (!name || !name.trim()) {
+            return;
+        }
+
+        if (name.includes('/') || name.includes('\\')) {
+            alert("Name cannot contain slashes. To create in a subdirectory, please create the folder first.");
+            return;
+        }
+        
+        const trimmedName = name.trim();
+        const newPath = parentDir ? `${parentDir}/${trimmedName}` : trimmedName;
+
+        const checkPathPrefix = `${newPath}/`;
+        if (Object.keys(files).some(p => p === newPath || (p.startsWith(checkPathPrefix)))) {
+            alert(`A file or folder with the name "${trimmedName}" already exists in this directory.`);
             return;
         }
 
         const finalPath = type === 'folder' ? `${newPath}/.gitkeep` : newPath;
         setFiles(prev => ({ ...prev, [finalPath]: '' }));
+        
         if (type === 'file') {
             handleFileSelect(finalPath);
+        } else {
+            setSelectedNode(newPath);
         }
     };
 
@@ -341,6 +382,9 @@ const App: React.FC = () => {
         if (currentFile && currentFile.startsWith(oldPath)) {
             setCurrentFile(currentFile.replace(oldPath, newName));
         }
+        if (selectedNode && selectedNode.startsWith(oldPath)) {
+            setSelectedNode(selectedNode.replace(oldPath, newName));
+        }
     };
 
     const handleDeleteNode = (path: string, isFolder: boolean) => {
@@ -348,20 +392,28 @@ const App: React.FC = () => {
 
         let newFiles = { ...files };
         let pathsToDelete: string[] = [];
+        const folderPrefix = path + '/';
         if (isFolder) {
-            pathsToDelete = Object.keys(files).filter(p => p.startsWith(path + '/'));
-        } else {
-            pathsToDelete = [path];
+            pathsToDelete = Object.keys(files).filter(p => p.startsWith(folderPrefix));
         }
+        pathsToDelete.push(path); // Add the file itself or the folder's .gitkeep if it exists
 
-        pathsToDelete.forEach(p => delete newFiles[p]);
+        Object.keys(files).forEach(p => {
+            if (p === path || (isFolder && p.startsWith(folderPrefix))) {
+                delete newFiles[p];
+            }
+        })
+        
         setFiles(newFiles);
         
-        const newOpenFiles = openFiles.filter(p => !pathsToDelete.includes(p));
+        const newOpenFiles = openFiles.filter(p => !p.startsWith(path));
         setOpenFiles(newOpenFiles);
 
-        if (currentFile && pathsToDelete.includes(currentFile)) {
+        if (currentFile && currentFile.startsWith(path)) {
             handleCloseFile(currentFile);
+        }
+        if (selectedNode && selectedNode.startsWith(path)) {
+            setSelectedNode(null);
         }
     };
 
@@ -397,6 +449,9 @@ const App: React.FC = () => {
 
         if (currentFile && currentFile.startsWith(draggedPath)) {
             setCurrentFile(currentFile.replace(draggedPath, newPath));
+        }
+        if (selectedNode && selectedNode.startsWith(draggedPath)) {
+            setSelectedNode(selectedNode.replace(draggedPath, newPath));
         }
     };
 
@@ -463,8 +518,9 @@ const App: React.FC = () => {
                     <div className="lg:col-span-2 h-full min-h-64 lg:min-h-0">
                         <FileExplorer
                             files={files}
-                            activeFile={currentFile}
+                            selectedNode={selectedNode}
                             onSelectFile={handleFileSelect}
+                            onSelectNode={handleNodeSelect}
                             isCollapsed={isExplorerCollapsed}
                             setIsCollapsed={setIsExplorerCollapsed}
                             onCreateNode={handleCreateNode}
